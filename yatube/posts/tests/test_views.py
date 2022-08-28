@@ -1,7 +1,7 @@
 from django.core.cache import cache
 from django.test import Client, TestCase
 from django.urls import reverse
-from posts.models import Group, Post, User
+from posts.models import Comment, Follow, Group, Post, User
 from posts.views import PER_PAGE
 
 
@@ -54,7 +54,7 @@ class PostPagesTests(TestCase):
                 self.assertTemplateUsed(response, template)
 
     def test_index_group_profile_show_correct_context(self):
-        """index, group, profile с верным context'ом"""
+        ''' index, group, profile с неверным контекстом. '''
         cache.clear()
         context = [
             self.authorized_client.get(reverse('posts:index')),
@@ -184,50 +184,47 @@ class FollowViewsTest(TestCase):
         ''' Тестируем подписку. '''
         cache.clear()
         client = self.authorized_user_fol_client
-        author = self.author
-        group = self.group
+        follow_count = Follow.objects.count()
         client.get(
             reverse(
                 'posts:profile_follow',
-                args=[author.username]
+                args=[self.author.username]
             )
         )
-        response_old = client.get(reverse('posts:follow_index'))
-        old_posts = response_old.context.get('page_obj').object_list
-        self.assertEqual(
-            len(response_old.context.get('page_obj').object_list),
-            1,
-            'Не загружается правильное колличество старых постов'
+        self.assertEqual(Follow.objects.count(), follow_count + 1)
+        follow_obj = Follow.objects.get(
+            author=self.author.id,
+            user=self.user_fol.id,
         )
-        self.assertIn(
-            self.post,
-            old_posts,
-            'Старый пост не верен'
-        )
-        new_post = Post.objects.create(
-            text='test_new_post',
-            group=group,
-            author=author
-        )
-        response_new = client.get(reverse('posts:follow_index'))
-        new_posts = response_new.context.get('page_obj').object_list
-        self.assertEqual(
-            len(response_new.context.get('page_obj').object_list),
-            2,
-            'Нету нового поста'
-        )
-        self.assertIn(
-            new_post,
-            new_posts,
-            'Новый пост не верен'
-        )
+        fol_obj = {
+            self.author: follow_obj.author,
+            self.user_fol: follow_obj.user,
+        }
+        for form, obj in fol_obj.items():
+            with self.subTest(form=form):
+                self.assertEqual(obj, form)
 
     def test_new_author_post_for_unfollower(self):
         ''' Тестируем отписку. '''
         cache.clear()
         client = self.authorized_user_unfol_client
-        author = self.author
-        group = self.group
+        Follow.objects.create(
+            user=self.user_unfol,
+            author=self.author
+        )
+        follow_count = Follow.objects.count()
+        client.get(
+            reverse(
+                'posts:profile_unfollow',
+                args=[self.author.username]
+            )
+        )
+        self.assertEqual(Follow.objects.count(), follow_count - 1)
+
+    def test_follow_index(self):
+        ''' Тестируем follow_index. '''
+        cache.clear()
+        client = self.authorized_user_unfol_client
         response_old = client.get(reverse('posts:follow_index'))
         old_posts = response_old.context.get('page_obj').object_list
         self.assertEqual(
@@ -242,8 +239,8 @@ class FollowViewsTest(TestCase):
         )
         new_post = Post.objects.create(
             text='test_new_post',
-            group=group,
-            author=author
+            group=self.group,
+            author=self.author
         )
         response_new = client.get(reverse('posts:follow_index'))
         new_posts = response_new.context.get(
@@ -301,3 +298,51 @@ class CacheViewsTest(TestCase):
             reverse('posts:index'))
         new_posts = response_new.content
         self.assertNotEqual(old_posts, new_posts, 'Нет сброса кэша.')
+
+
+class CommentViewsTest(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.auth_user = User.objects.create_user(username='test_user')
+        cls.auth_client = Client()
+        cls.auth_client.force_login(cls.auth_user)
+        cls.author = User.objects.create_user(username='test_author')
+        cls.group = Group.objects.create(
+            title='test_group',
+            slug='test-slug',
+            description='test_description'
+        )
+        cls.post = Post.objects.create(
+            text='test_post',
+            group=cls.group,
+            author=cls.author
+        )
+
+    def test_add_comment(self):
+        ''' Тест добавления коммента к посту. '''
+        comment_count = Comment.objects.count()
+        form_data = {
+            'text': 'test-comment',
+        }
+        response = self.auth_client.post(
+            reverse(
+                'posts:add_comment',
+                kwargs={'post_id': self.post.id}
+            ),
+            data=form_data,
+            follow=True
+        )
+        comment_obj = Comment.objects.first()
+        self.assertRedirects(
+            response,
+            reverse(
+                'posts:post_detail',
+                kwargs={'post_id': self.post.id}
+            )
+        )
+        self.assertEqual(Comment.objects.count(), comment_count + 1)
+        self.assertTrue(Comment.objects.filter(
+            text=form_data['text'],
+        ).exists())
+        self.assertEqual(comment_obj.author, self.auth_user)

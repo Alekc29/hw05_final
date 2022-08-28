@@ -15,6 +15,7 @@ TEMP_MEDIA_ROOT = tempfile.mkdtemp(dir=settings.BASE_DIR)
 class PostCreateForm(TestCase):
     @classmethod
     def setUpClass(cls):
+        ''' Создаём юзера и тестовые группы. '''
         super().setUpClass()
         cls.user = User.objects.create_user(username='auth')
         cls.group = Group.objects.create(
@@ -82,16 +83,16 @@ class PostCreateForm(TestCase):
                 group=form_data['group'],
             ).exists()
         )
-        create_object = response.context['post']
-        context_objects = {
-            form_data['author']: create_object.author,
-            form_data['text']: create_object.text,
-            form_data['group']: create_object.group.id,
-            'posts/small.gif': create_object.image,
+        post_obj = Post.objects.first()
+        forms_objects = {
+            form_data['author']: post_obj.author,
+            form_data['text']: post_obj.text,
+            form_data['group']: post_obj.group.id,
+            'posts/small.gif': post_obj.image,
         }
-        for form, response_name in context_objects.items():
+        for form, obj in forms_objects.items():
             with self.subTest(form=form):
-                self.assertEqual(response_name, form)
+                self.assertEqual(obj, form)
 
     def test_edit_post(self):
         ''' Валидная форма изменяет запись в Post. '''
@@ -126,12 +127,12 @@ class PostCreateForm(TestCase):
                 group=form_data['group'],
             ).exists()
         )
-        edit_object = response.context['post']
-        context_objects = {
-            form_data['author']: edit_object.author,
-            form_data['text']: edit_object.text,
-            form_data['group']: edit_object.group.id,
+        post_obj = Post.objects.first()
+        forms_objects = {
+            form_data['author']: post_obj.author,
+            form_data['text']: post_obj.text,
+            form_data['group']: post_obj.group.id,
         }
-        for form, response_name in context_objects.items():
+        for form, obj in forms_objects.items():
             with self.subTest(form=form):
-                self.assertEqual(response_name, form)
+                self.assertEqual(obj, form)

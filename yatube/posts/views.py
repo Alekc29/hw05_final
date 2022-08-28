@@ -142,7 +142,7 @@ def profile_follow(request, username):
     follower = Follow.objects.filter(
         user=request.user,
         author=get_object_or_404(User, username=username)
-    ).count()
+    ).exists()
     if request.user.username != username and not follower:
         Follow.objects.create(
             user=request.user,
@@ -154,9 +154,10 @@ def profile_follow(request, username):
 @login_required
 def profile_unfollow(request, username):
     ''' Функция отписки от автора. '''
-    follower = Follow.objects.get(
+    follower = Follow.objects.filter(
         user=request.user,
         author=get_object_or_404(User, username=username)
     )
-    follower.delete()
+    if follower:
+        follower.delete()
     return redirect('posts:profile', username=username)
