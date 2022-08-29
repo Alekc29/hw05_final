@@ -24,10 +24,10 @@ class PostPagesTests(TestCase):
     def setUp(self):
         self.authorized_client = Client()
         self.authorized_client.force_login(self.user)
+        cache.clear()
 
     def test_pages_uses_correct_template(self):
         ''' Проверка namespase:name и соответствующих шаблонов. '''
-        cache.clear()
         templates_pages_names = {
             reverse('posts:index'): 'posts/index.html',
             reverse('posts:post_create'): 'posts/create_post.html',
@@ -54,17 +54,28 @@ class PostPagesTests(TestCase):
                 self.assertTemplateUsed(response, template)
 
     def test_index_group_profile_show_correct_context(self):
-        ''' index, group, profile с неверным контекстом. '''
-        cache.clear()
-        context = [
-            self.authorized_client.get(reverse('posts:index')),
-            self.authorized_client.get(reverse(
-                'posts:group_list', kwargs={'slug': self.group.slug})),
-            self.authorized_client.get(reverse(
-                'posts:profile', kwargs={'username': self.user.username})),
-        ]
-        for response in context:
-            first_object = response.context['page_obj'][0]
+        ''' index, group, profile, detail с неверным контекстом. '''
+        context = {
+            reverse('posts:index'): 'page_obj',
+            reverse(
+                'posts:group_list',
+                kwargs={'slug': self.group.slug}
+            ): 'page_obj',
+            reverse(
+                'posts:profile',
+                kwargs={'username': self.user.username}
+            ): 'page_obj',
+            reverse(
+                'posts:post_detail',
+                kwargs={'post_id': f'{self.post.id}'}
+            ): 'post',
+        }
+        for revers, cont_obj in context.items():
+            response = self.authorized_client.get(revers)
+            if cont_obj == 'page_obj':
+                first_object = response.context['page_obj'][0]
+            else:
+                first_object = response.context['post']
             context_objects = {
                 self.post.author: first_object.author,
                 self.post.text: first_object.text,
@@ -74,24 +85,6 @@ class PostPagesTests(TestCase):
             for reverse_name, response_name in context_objects.items():
                 with self.subTest(reverse_name=reverse_name):
                     self.assertEqual(response_name, reverse_name)
-
-    def test_detail_page_correct_context(self):
-        ''' Шаблон post_detail сформирован с неправильным контекстом. '''
-        reverse_name = reverse(
-            'posts:post_detail',
-            kwargs={'post_id': f'{self.post.id}'}
-        )
-        response = self.authorized_client.get(reverse_name)
-        first_object = response.context['post']
-        context_objects = {
-            self.post.author: first_object.author,
-            self.post.text: first_object.text,
-            self.group.slug: first_object.group.slug,
-            self.post.id: first_object.id,
-        }
-        for reverse_name, response_name in context_objects.items():
-            with self.subTest(reverse_name=reverse_name):
-                self.assertEqual(response_name, reverse_name)
 
 
 class PaginatorViewsTest(TestCase):
@@ -129,10 +122,10 @@ class PaginatorViewsTest(TestCase):
                 kwargs={'username': self.user.username}
             ),
         }
+        cache.clear()
 
     def test_first_page_contains_ten_records(self):
         ''' Проверка: на первой странице должно быть 10 (PER_PAGE) постов. '''
-        cache.clear()
         for name, address in self.url_names.items():
             with self.subTest(name=name):
                 response = self.client.get(address)
@@ -180,12 +173,13 @@ class FollowViewsTest(TestCase):
             author=cls.author
         )
 
-    def test_new_author_post_for_follower(self):
-        ''' Тестируем подписку. '''
+    def setUp(self):
         cache.clear()
-        client = self.authorized_user_fol_client
+
+    def test_follower(self):
+        ''' Тестируем подписку. '''
         follow_count = Follow.objects.count()
-        client.get(
+        self.authorized_user_fol_client.get(
             reverse(
                 'posts:profile_follow',
                 args=[self.author.username]
@@ -204,16 +198,14 @@ class FollowViewsTest(TestCase):
             with self.subTest(form=form):
                 self.assertEqual(obj, form)
 
-    def test_new_author_post_for_unfollower(self):
+    def test_unfollower(self):
         ''' Тестируем отписку. '''
-        cache.clear()
-        client = self.authorized_user_unfol_client
         Follow.objects.create(
             user=self.user_unfol,
             author=self.author
         )
         follow_count = Follow.objects.count()
-        client.get(
+        self.authorized_user_unfol_client.get(
             reverse(
                 'posts:profile_unfollow',
                 args=[self.author.username]
@@ -221,14 +213,63 @@ class FollowViewsTest(TestCase):
         )
         self.assertEqual(Follow.objects.count(), follow_count - 1)
 
-    def test_follow_index(self):
-        ''' Тестируем follow_index. '''
-        cache.clear()
-        client = self.authorized_user_unfol_client
-        response_old = client.get(reverse('posts:follow_index'))
-        old_posts = response_old.context.get('page_obj').object_list
+    def test_post_appears_in_follow_page_for_followed_author(self):
+        ''' Посты автора появляются на странице подписчика. '''
+        group = self.group
+        self.authorized_user_fol_client.get(
+            reverse(
+                'posts:profile_follow',
+                args=[self.author.username]
+            )
+        )
+        response_old = self.authorized_user_fol_client.get(
+            reverse('posts:follow_index')
+        )
+        old_posts = response_old.context.get(
+            'page_obj'
+        ).object_list
         self.assertEqual(
-            len(response_old.context.get('page_obj').object_list),
+            len(response_old.context.get('page_obj')),
+            self.author.posts.count(),
+            'Не загружается правильное колличество старых постов'
+        )
+        self.assertIn(
+            self.post,
+            old_posts,
+            'Старый пост не верен'
+        )
+        new_post = Post.objects.create(
+            text='test_new_post',
+            group=group,
+            author=self.author
+        )
+        response_new = self.authorized_user_fol_client.get(
+            reverse('posts:follow_index')
+        )
+        new_posts = response_new.context.get(
+            'page_obj'
+        ).object_list
+        self.assertEqual(
+            len(response_new.context.get('page_obj')),
+            self.author.posts.count(),
+            'Нету нового поста'
+        )
+        self.assertIn(
+            new_post,
+            new_posts,
+            'Новый пост не верен'
+        )
+
+    def test_post_appers_in_follow_page_for_unfollowed_author(self):
+        ''' Посты автора не появляются на странице неподписчика. '''
+        response_old = self.authorized_user_unfol_client.get(
+            reverse('posts:follow_index')
+        )
+        old_posts = response_old.context.get(
+            'page_obj'
+        ).object_list
+        self.assertEqual(
+            len(response_old.context.get('page_obj')),
             0,
             'Не загружается правильное колличество старых постов'
         )
@@ -237,23 +278,17 @@ class FollowViewsTest(TestCase):
             old_posts,
             'Старый пост не должен загружаться'
         )
-        new_post = Post.objects.create(
+        Post.objects.create(
             text='test_new_post',
             group=self.group,
             author=self.author
         )
-        response_new = client.get(reverse('posts:follow_index'))
-        new_posts = response_new.context.get(
-            'page_obj'
-        ).object_list
-        self.assertEqual(
-            len(response_new.context.get('page_obj').object_list),
-            0,
-            'Новый пост не должен появляться'
+        response_new = self.authorized_user_unfol_client.get(
+            reverse('posts:follow_index')
         )
-        self.assertNotIn(
-            new_post,
-            new_posts,
+        self.assertEqual(
+            len(response_new.context.get('page_obj')),
+            0,
             'Новый пост не должен появляться'
         )
 
@@ -263,8 +298,8 @@ class CacheViewsTest(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.author = User.objects.create_user(username='test_user')
-        cls.authorized_client = Client()
-        cls.authorized_client.force_login(cls.author)
+        cls.auth_client = Client()
+        cls.auth_client.force_login(cls.author)
         cls.group = Group.objects.create(
             title='test_group',
             slug='test-slug',
@@ -276,28 +311,27 @@ class CacheViewsTest(TestCase):
             author=cls.author
         )
 
-    def test_cache_index(self):
-        """Проверка кэша для index."""
-        response = self.authorized_client.get(reverse('posts:index'))
-        posts = response.content
+    def test_cache_index_pages(self):
+        ''' Проверяем работу кэша главной страницы. '''
+        first_response = self.auth_client.get(reverse('posts:index'))
+        anoter_post_note = 'Создаем еще один пост'
         Post.objects.create(
-            text='test_new_post',
-            author=self.author,
+            text=anoter_post_note,
+            author=self.author
         )
-        response_old = self.authorized_client.get(
-            reverse('posts:index')
-        )
-        old_posts = response_old.content
+        response_after_post_add = self.auth_client.get(reverse('posts:index'))
         self.assertEqual(
-            old_posts,
-            posts,
-            'Не возвращает кэшированную страницу.'
+            first_response.content,
+            response_after_post_add.content
         )
         cache.clear()
-        response_new = self.authorized_client.get(
-            reverse('posts:index'))
-        new_posts = response_new.content
-        self.assertNotEqual(old_posts, new_posts, 'Нет сброса кэша.')
+        response_after_cache_clean = self.auth_client.get(
+            reverse('posts:index')
+        )
+        self.assertNotEqual(
+            first_response.content,
+            response_after_cache_clean.content
+        )
 
 
 class CommentViewsTest(TestCase):
